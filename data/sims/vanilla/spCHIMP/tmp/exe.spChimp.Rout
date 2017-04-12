@@ -1,0 +1,281 @@
+
+R version 3.3.2 (2016-10-31) -- "Sincere Pumpkin Patch"
+Copyright (C) 2016 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin13.4.0 (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> get.projection.matrix <- function(mean.sample.sizes){
++ 	k <- length(mean.sample.sizes)
++ 	transformation.matrix <- get.transformation.matrix(mean.sample.sizes)
++ 	qr.transformation.matrix <- qr(t(transformation.matrix))
++ 	projection.matrix <- qr.Q(qr.transformation.matrix)[,1:qr.transformation.matrix$rank]
++ 	stopifnot(qr.transformation.matrix$rank == sum(abs(eigen(transformation.matrix)$values - 1) < 1e-2) )
++ 	return(projection.matrix)
++ }
+> 
+> get.transformation.matrix <- function(mean.sample.sizes){
++ 	k <- length(mean.sample.sizes)
++ 	transformation.matrix <- diag(k) - matrix(mean.sample.sizes/sum(mean.sample.sizes),nrow=k,ncol=k,byrow=TRUE)
++ 	return(transformation.matrix)
++ }
+> 
+> project.sample.covariance <- function(sample.covariance,proj.mat){
++ 	proj.samp.cov <- t(proj.mat) %*% sample.covariance %*% proj.mat
++ 	return(proj.samp.cov)
++ }
+> 
+> get.norm.factor <- function(freqs,n.loci,sample.sizes){
++ 	pseudo.freqs <- rbind(freqs,rep(0.5,n.loci))	
++ 	if(class(sample.sizes)=="matrix"){
++ 		sample.sizes <- rbind(sample.sizes,rep(1,n.loci))
++ 		sum.sample.sizes <- colSums(sample.sizes)
++ 		pseudo.means <- sapply(1:n.loci,
++ 							function(i){
++ 								sum(
++ 									(pseudo.freqs[,i] * sample.sizes[,i]) / 
++ 										sum.sample.sizes[i],na.rm=TRUE)
++ 							}
++ 						)
++ 	} else {
++ 		sample.sizes <- c(sample.sizes,1)
++ 		sum.sample.sizes <- sum(sample.sizes)
++ 		pseudo.means <- apply(pseudo.freqs,2,
++ 							function(x){
++ 								sum(
++ 									(x * c(sample.sizes,1)) / 
++ 										sum.sample.sizes,na.rm=TRUE)
++ 							}
++ 						)
++ 	}
++ 	norm.factor <- sqrt(pseudo.means * (1-pseudo.means))
++ 	norm.factor <- matrix(norm.factor,nrow=nrow(freqs),ncol=n.loci,byrow=TRUE)
++ 	return(norm.factor)
++ }
+> 
+> get.mean.freqs <- function(freqs,n.loci,sample.sizes){
++ 	if(class(sample.sizes)=="matrix"){
++ 		sum.sample.sizes <- colSums(sample.sizes)
++ 		mean.freqs <- matrix(
++ 						sapply(1:n.loci,
++ 								function(i){
++ 									sum((freqs[,i] * sample.sizes[,i]) / 
++ 										sum.sample.sizes[i],na.rm=TRUE)
++ 								}
++ 						),
++ 					  nrow=nrow(freqs),ncol=n.loci,byrow=TRUE)
++ 	} else {
++ 		sum.sample.sizes <- sum(sample.sizes)		
++ 		mean.freqs <- matrix(
++ 						apply(freqs,2,
++ 								function(x){
++ 									sum((x * sample.sizes) / 
++ 										sum.sample.sizes,na.rm=TRUE)
++ 								}
++ 						),nrow=nrow(freqs),ncol=n.loci,byrow=TRUE)
++ 	}
++ 	return(mean.freqs)
++ }
+> 	
+> stdize.freqs <- function(freqs,n.loci,sample.sizes){
++ 	norm.factor <- get.norm.factor(freqs,n.loci,sample.sizes)
++ 	mean.freqs <- get.mean.freqs(freqs,n.loci,sample.sizes)
++ 	mc.freqs <- freqs-mean.freqs
++ 	norm.freqs <- freqs/norm.factor
++ 	std.freqs <- (freqs-mean.freqs)/norm.factor
++ 	stdized.freqs <- list("std.freqs" = std.freqs,
++ 							"norm.freqs" = norm.freqs)
++ 	return(stdized.freqs)
++ }
+> 
+> stdize.cov <- function(stdized.freqs,proj.mat){
++ 	norm.cov <- cov(t(stdized.freqs$norm.freqs),use="pairwise.complete.obs")
++ 	std.cov <- cov(t(stdized.freqs$std.freqs),use="pairwise.complete.obs")
++ 	proj.std.cov <- project.sample.covariance(std.cov,proj.mat)
++ 	stdized.cov <- list("norm.cov" = norm.cov,
++ 						"std.cov" = std.cov,
++ 						"proj.std.cov" = proj.std.cov)
++ 	return(stdized.cov)
++ }
+> 
+> process.freq.data <- function(freqs,sample.sizes){
++ 	invars <- apply(freqs,2,function(x){length(unique(x)) == 1})
++ 	freqs <- freqs[,!invars]
++ 	sample.sizes <- sample.sizes[,!invars]
++ 	mean.sample.sizes <- rowMeans(sample.sizes)
++ 	n.loci <- ncol(freqs)
++ 	proj.mat <- get.projection.matrix(mean.sample.sizes)
++ 	stdized.freqs <- stdize.freqs(freqs,n.loci,sample.sizes)
++ 	stdized.cov <- stdize.cov(stdized.freqs,proj.mat)
++ 	obsSigma <- stdized.cov$proj.std.cov
++ 	processed.freq.data <- list("sample.sizes" = mean.sample.sizes,
++ 								"freqs" = freqs,
++ 								"stdized.freqs" = stdized.freqs,
++ 								"stdized.cov" = stdized.cov,
++ 								"obsSigma" = obsSigma,
++ 								"projMat" = proj.mat)
++ 	return(processed.freq.data)
++ }
+> 
+> make.data.block <- function(pCoords,dCoords,processed.freq.data,earth=FALSE){
++ 	if(earth){
++ 		pDist <- fields::rdist.earth(pCoords)
++ 		dDist <- fields::rdist.earth(dCoords)
++ 	} else {
++ 		pDist <- fields::rdist(pCoords)
++ 		dDist <- fields::rdist(dCoords)
++ 	}
++ 	# pDist <- pDist/sd(c(pDist,dDist))
++ 	# dDist <- dDist/sd(c(pDist,dDist))
++ 	data.block <- list("N" = nrow(pCoords) + nrow(dCoords),
++ 					   "nP" = nrow(pCoords),
++ 					   "nD" = nrow(dCoords),
++ 					   "L" = ncol(processed.freq.data$freqs),
++ 					   "obsSigma" = processed.freq.data$obsSigma,
++ 					   "pCoords" = pCoords,
++ 					   "dCoords" = dCoords,
++ 					   "pDist" = pDist,
++ 					   "dDist" = dDist,
++ 					   "projMat" = processed.freq.data$projMat)
++ 	return(data.block)
++ }
+> 
+> 
+> source("~/Dropbox/spaceCHIMP/code/spaceCHIMP.R")
+> require(rstan)
+Loading required package: rstan
+Loading required package: ggplot2
+Loading required package: StanHeaders
+rstan (Version 2.14.1, packaged: 2016-12-28 14:55:41 UTC, GitRev: 5fa1e80eb817)
+For execution on a local, multicore CPU with excess RAM we recommend calling
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+> load(list.files(pattern="dataset.Robj"))
+> 
+> processed.freq.data <- process.freq.data(sim.dataset$data.list$allele.freqs,
++ 										 sim.dataset$data.list$sample.sizes)
+> data.block <- make.data.block(pCoords = sim.dataset$data.list$pd.coords[["parental"]],
++ 							  dCoords = sim.dataset$data.list$pd.coords[["daughter"]],
++ 							  processed.freq.data = processed.freq.data,
++ 							  earth=FALSE)
+> 	
+> model.fit <- stan(model_code=model.block,
++ 				  data=data.block,
++ 				  refresh=1e2,
++ 				  chains=1,
++ 				  iter=2e3,
++ 				  thin=2e3/500)
+DIAGNOSTIC(S) FROM PARSER:
+WARNING: left-hand side variable (name=Sigma) occurs on right-hand side of assignment, causing inefficient deep copy to avoid aliasing.
+
+In file included from file111c01bef93df.cpp:8:
+In file included from /Library/Frameworks/R.framework/Versions/3.3/Resources/library/StanHeaders/include/src/stan/model/model_header.hpp:4:
+In file included from /Library/Frameworks/R.framework/Versions/3.3/Resources/library/StanHeaders/include/stan/math.hpp:4:
+In file included from /Library/Frameworks/R.framework/Versions/3.3/Resources/library/StanHeaders/include/stan/math/rev/mat.hpp:4:
+In file included from /Library/Frameworks/R.framework/Versions/3.3/Resources/library/StanHeaders/include/stan/math/rev/core.hpp:12:
+In file included from /Library/Frameworks/R.framework/Versions/3.3/Resources/library/StanHeaders/include/stan/math/rev/core/gevv_vvv_vari.hpp:5:
+In file included from /Library/Frameworks/R.framework/Versions/3.3/Resources/library/StanHeaders/include/stan/math/rev/core/var.hpp:7:
+In file included from /Library/Frameworks/R.framework/Versions/3.3/Resources/library/BH/include/boost/math/tools/config.hpp:13:
+In file included from /Library/Frameworks/R.framework/Versions/3.3/Resources/library/BH/include/boost/config.hpp:39:
+/Library/Frameworks/R.framework/Versions/3.3/Resources/library/BH/include/boost/config/compiler/clang.hpp:196:11: warning: 'BOOST_NO_CXX11_RVALUE_REFERENCES' macro redefined [-Wmacro-redefined]
+#  define BOOST_NO_CXX11_RVALUE_REFERENCES
+          ^
+<command line>:6:9: note: previous definition is here
+#define BOOST_NO_CXX11_RVALUE_REFERENCES 1
+        ^
+1 warning generated.
+
+SAMPLING FOR MODEL '83d5dc858d920453b7ae7fb1da7f14e9' NOW (CHAIN 1).
+
+Chain 1, Iteration:    1 / 2000 [  0%]  (Warmup)
+Chain 1, Iteration:  100 / 2000 [  5%]  (Warmup)
+Chain 1, Iteration:  200 / 2000 [ 10%]  (Warmup)
+Chain 1, Iteration:  300 / 2000 [ 15%]  (Warmup)
+Chain 1, Iteration:  400 / 2000 [ 20%]  (Warmup)
+Chain 1, Iteration:  500 / 2000 [ 25%]  (Warmup)
+Chain 1, Iteration:  600 / 2000 [ 30%]  (Warmup)
+Chain 1, Iteration:  700 / 2000 [ 35%]  (Warmup)
+Chain 1, Iteration:  800 / 2000 [ 40%]  (Warmup)
+Chain 1, Iteration:  900 / 2000 [ 45%]  (Warmup)
+Chain 1, Iteration: 1000 / 2000 [ 50%]  (Warmup)
+Chain 1, Iteration: 1001 / 2000 [ 50%]  (Sampling)
+Chain 1, Iteration: 1100 / 2000 [ 55%]  (Sampling)
+Chain 1, Iteration: 1200 / 2000 [ 60%]  (Sampling)
+Chain 1, Iteration: 1300 / 2000 [ 65%]  (Sampling)
+Chain 1, Iteration: 1400 / 2000 [ 70%]  (Sampling)
+Chain 1, Iteration: 1500 / 2000 [ 75%]  (Sampling)
+Chain 1, Iteration: 1600 / 2000 [ 80%]  (Sampling)
+Chain 1, Iteration: 1700 / 2000 [ 85%]  (Sampling)
+Chain 1, Iteration: 1800 / 2000 [ 90%]  (Sampling)
+Chain 1, Iteration: 1900 / 2000 [ 95%]  (Sampling)
+Chain 1, Iteration: 2000 / 2000 [100%]  (Sampling)
+ Elapsed Time: 54.261 seconds (Warm-up)
+               67.051 seconds (Sampling)
+               121.312 seconds (Total)
+
+The following numerical problems occured the indicated number of times on chain 1
+                                                                                                     count
+Exception thrown at line 81: wishart_log: LDLT_Factor of scale parameter is not positive definite. l     3
+When a numerical problem occurs, the Hamiltonian proposal gets rejected.
+See http://mc-stan.org/misc/warnings.html#exception-hamiltonian-proposal-rejected
+If the number in the 'count' column is small, do not ask about this message on stan-users.
+> 
+> save(data.block,model.fit,processed.freq.data,file="output.Robj")
+> 
+> best <- which.max(get_logposterior(model.fit,inc_warmup=TRUE)[[1]])
+> if(any(grepl("proj",names(model.fit)))){
++ 	my.cov <- geoStructure::get.proj.par.cov(model.fit,1,data.block$N)	
++ } else {
++ 	my.cov <- geoStructure::get.par.cov(model.fit,1,data.block$N)	
++ }
+> 
+> Z <- extract(model.fit,"sourceCoords",permute=FALSE,inc_warmup=TRUE)[,1,]
+> allDist <- fields::rdist(sim.dataset$data.list$coords)
+> tmat <- get.transformation.matrix(rowMeans(sim.dataset$data.list$sample.sizes))
+> par.cov <- geoStructure::get.par.cov(model.fit,1,data.block$N)[best,,]
+> pdf(file="fit.pdf",width=9,height=8)
+> 	par(mar=c(2,2,2,2))
+> 	layout(mat=matrix(c(1,2,3,4),nrow=2,ncol=2,byrow=TRUE))
+> 	plot(data.block$obsSigma,my.cov[best,,],pch=20,
++ 			xlab="observed covariance",
++ 			ylab="parametric fit")
+> 		abline(0,1,col=2)
+> 	plot(allDist,processed.freq.data$stdized.cov$std.cov,col="purple",cex=1.5)
+> 		points(data.block$pDist,
++ 				processed.freq.data$stdized.cov$std.cov[1:data.block$nP,1:data.block$nP],
++ 				col="blue",pch=20,cex=1.5)
+> 		points(data.block$dDist,
++ 				processed.freq.data$stdized.cov$std.cov[(data.block$nP+1):data.block$N,(data.block$nP+1):data.block$N],
++ 				col="red",pch=20,cex=1.5)
+> 		points(allDist,tmat %*% par.cov %*% t(tmat),col=1,pch=20,,cex=0.8)
+> 	posterior <- get_logposterior(model.fit,inc_warmup=TRUE)[[1]]
+> 	n.iter <- length(posterior)
+> 	plot(posterior[(n.iter/2+1):n.iter],type='l')
+> 	plot(data.block$pCoords,pch=19,cex=4,col="blue",
++ 			ylim=range(data.block$pCoords[,2],data.block$dCoords[,2])+c(-0.5,0.5),
++ 			xlim=range(data.block$pCoords[,1],data.block$dCoords[,1])+c(-0.5,0.5))
+> 		text(data.block$pCoords,labels=1:nrow(data.block$pCoords),col="white")
+> 		points(data.block$dCoords+c(0.1,0.1),col="red",cex=4,pch=19)
+> 		text(data.block$dCoords+c(0.1,0.1),labels=1:nrow(data.block$dCoords),col="black")
+> 			points(sim.dataset$data.list$coords[sim.dataset$par.list$daughter.source,,drop=FALSE],col="green",pch=1,cex=5)
+> 		points(Z,col=adjustcolor(1,0.1),pch=20)
+> dev.off()
+null device 
+          1 
+> 
+> 
+> proc.time()
+   user  system elapsed 
+145.314   1.369 149.294 

@@ -200,8 +200,9 @@ make.par.list <- function(sampling.coords,sampled.pops,admix.list,drop,allele.co
 			}
 			admix.props[admix.list$targets,] <- cbind(admix.list$admixture.proportions,1 - admix.list$admixture.proportions)
 		}
+		pd.coords <- sampling.coords
 		coords <- rbind(sampling.coords[[1]],
-						sampling.coords[[2]])
+							sampling.coords[[2]])
 	#prune for analysis
 		if(drop=="nobody"){
 			to.drop <- FALSE
@@ -213,7 +214,6 @@ make.par.list <- function(sampling.coords,sampled.pops,admix.list,drop,allele.co
 		allele.counts <- allele.counts[!to.drop,]
 		sample.sizes <- sample.sizes[!to.drop,]
 		coords <- 	coords[!to.drop,]
-		geoDist <- fields::rdist(coords)
 	#make parameter list
 		par.list <- list("layer.indices" = layer.indices,
 					 	 "admix.props" = admix.props,
@@ -221,7 +221,7 @@ make.par.list <- function(sampling.coords,sampled.pops,admix.list,drop,allele.co
 		data.list <- list("allele.freqs" = allele.counts/sample.sizes,
 						  "sample.sizes" = sample.sizes,
 						  "coords"	= coords,
-						  "geoDist" = geoDist)
+						  "pd.coords" = pd.coords)
 		sim.list <- list("par.list" = par.list,
 						 "data.list" = data.list)
 		return(sim.list)
